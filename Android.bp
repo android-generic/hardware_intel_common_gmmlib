@@ -102,6 +102,7 @@ cc_library_shared {
         "-Wno-logical-op-parentheses",
         "-Wno-shift-negative-value",
         "-Wno-unused-parameter",
+        "-Wno-pragma-pack-suspicious-include",
     ],
 
     cppflags: [
