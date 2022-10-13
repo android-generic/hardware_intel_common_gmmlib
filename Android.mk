@@ -73,6 +73,7 @@ LOCAL_CFLAGS := \
     -msse2 \
     -msse3 \
     -mssse3 \
+    -msse4 \
     -msse4.1 \
     -msse4.2 \
     -DGMM_LIB_DLL \
@@ -102,6 +103,7 @@ LOCAL_CPPFLAGS := \
     -Wno-pragma-pack \
     -fexceptions \
     -std=c++11 \
+    -Wno-pragma-pack-suspicious-include
 
 LOCAL_C_INCLUDES = \
     $(LOCAL_PATH)/Source/GmmLib \
