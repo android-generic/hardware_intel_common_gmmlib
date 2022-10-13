@@ -69,6 +69,13 @@ LOCAL_SRC_FILES = \
 LOCAL_CFLAGS := \
     -Wno-error \
     -Wno-unused-parameter \
+    -msse \
+    -msse2 \
+    -msse3 \
+    -mssse3 \
+    -msse4 \
+    -msse4.1 \
+    -msse4.2 \
     -DGMM_LIB_DLL \
     -DGMM_LIB_DLL_EXPORTS \
     -DGMM_UNIFIED_LIB \
@@ -87,7 +94,8 @@ LOCAL_CFLAGS := \
 
 LOCAL_CPPFLAGS := \
     -fexceptions \
-    -std=c++11
+    -std=c++11 \
+    -Wno-pragma-pack-suspicious-include
 
 LOCAL_C_INCLUDES = \
     $(LOCAL_PATH)/Source/GmmLib \
