@@ -69,6 +69,7 @@ cc_library_static {
     cflags: [
         "-Wno-error",
         "-Wno-unused-parameter",
+        "-Wno-pragma-pack-suspicious-include",
         "-DGMM_LIB_DLL",
         "-DGMM_LIB_DLL_EXPORTS",
         "-DGMM_UNIFIED_LIB",
