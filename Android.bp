@@ -109,7 +109,6 @@ cc_library_static {
 	"Source/inc",
 	"Source/inc/common",
 	"Source/inc/umKmInc",
-	"Source/install",
     ],
 
     export_include_dirs: [
