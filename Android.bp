@@ -134,12 +134,6 @@ cc_library_shared {
         "Source/inc/umKmInc",
     ],
 
-    enabled: false,
-    arch: {
-        x86_64: {
-            enabled: true,
-        },
-    },
 }
 
 cc_library_headers {
@@ -151,10 +145,4 @@ cc_library_headers {
         "Source/inc/common",
     ],
 
-    enabled: false,
-    arch: {
-        x86_64: {
-            enabled: true,
-        },
-    },
 }
