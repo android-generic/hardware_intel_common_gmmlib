@@ -560,7 +560,7 @@ GMM_STATUS GmmLib::GmmTextureCalc::FillTexPitchAndSize(GMM_TEXTURE_INFO * pTexIn
         uint8_t IsYUVSurface = ((GmmIsPlanar(pTexInfo->Format) &&
                                  (!((pTexInfo->Format == GMM_FORMAT_BGRP) || (pTexInfo->Format == GMM_FORMAT_RGBP)))) ||
                                 (GmmIsYUVPacked(pTexInfo->Format) &&
-                                 !((pTexInfo->Format == GMM_FORMAT_YVYU_2x1) || (pTexInfo->Format == GMM_FORMAT_UYVY_2x1) || (pTexInfo->Format == GMM_FORMAT_UYVY_2x1))));
+                                 !((pTexInfo->Format == GMM_FORMAT_YVYU_2x1) || (pTexInfo->Format == GMM_FORMAT_UYVY_2x1))));
 
         //YCRCB* formats
         uint8_t IsYCrCbSurface = ((pTexInfo->Format == GMM_FORMAT_YCRCB_NORMAL) ||
@@ -1329,7 +1329,6 @@ GMM_STATUS GmmLib::GmmTextureCalc::FillTexBlockMem(GMM_TEXTURE_INFO * pTexInfo,
     __GMM_ASSERTPTR(pRestrictions, GMM_ERROR);
     __GMM_ASSERT(pTexInfo->BitsPerPixel == GMM_BITS(8) || (pTexInfo->Flags.Info.AllowVirtualPadding));
     __GMM_ASSERT(pTexInfo->BaseHeight == 1);
-    __GMM_ASSERT(pTexInfo->Flags.Info.Linear == 1);
     __GMM_ASSERT(pTexInfo->Flags.Info.TiledW == 0);
     __GMM_ASSERT(pTexInfo->Flags.Info.TiledX == 0);
     __GMM_ASSERT(pTexInfo->Flags.Info.TiledY == 0);

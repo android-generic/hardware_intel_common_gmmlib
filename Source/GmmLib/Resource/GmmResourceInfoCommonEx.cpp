@@ -45,7 +45,16 @@ bool GmmLib::GmmResourceInfoCommon::CopyClientParams(GMM_RESCREATE_PARAMS &Creat
         return false;
     }
     {
-        // Promote tiling options if caller does not provide any.
+        if ((GetGmmLibContext()->GetSkuTable().FtrXe2Compression) &&
+            (CreateParams.Type == RESOURCE_BUFFER) &&
+            (CreateParams.Flags.Info.Linear) &&
+            (CreateParams.Flags.Gpu.FlipChain))
+        {
+            CreateParams.Flags.Info.Linear = false;
+            CreateParams.Flags.Info.Tile4  = true;
+        }
+	
+	// Promote tiling options if caller does not provide any.
         // X/Y/W/L are tiling formats, and Yf/Ys are modifiers to the internal
         // ordering for Y and L macro-formats.
         if((CreateParams.Flags.Info.Linear +
@@ -59,7 +68,14 @@ bool GmmLib::GmmResourceInfoCommon::CopyClientParams(GMM_RESCREATE_PARAMS &Creat
                CreateParams.Flags.Info.ExistingSysMem)
             {
                 CreateParams.Flags.Info.Linear = true;
-            }
+
+                if ((GetGmmLibContext()->GetSkuTable().FtrXe2Compression) &&
+                    CreateParams.Flags.Gpu.FlipChain && (CreateParams.Type == RESOURCE_BUFFER))
+                {
+                    CreateParams.Flags.Info.Linear = false;
+                    CreateParams.Flags.Info.Tile4  = true;
+                }
+	    }
 
             if(GetGmmLibContext()->GetSkuTable().FtrTileY)
             {
@@ -164,6 +180,19 @@ bool GmmLib::GmmResourceInfoCommon::CopyClientParams(GMM_RESCREATE_PARAMS &Creat
 
                 // Displayable surfaces cannot be Tiled4/64.
                 __GMM_ASSERT(!GetGmmLibContext()->GetSkuTable().FtrDisplayYTiling);
+		
+		if (GFX_GET_CURRENT_RENDERCORE(GetGmmLibContext()->GetPlatformInfo().Platform) >= IGFX_XE3_CORE)
+                {
+                    if (CreateParams.Flags.Gpu.FlipChain || CreateParams.Flags.Gpu.Overlay ||
+                        CreateParams.Flags.Gpu.Presentable)
+                    {
+                        if (CreateParams.Flags.Info.TiledX == 1)
+                        {
+                            CreateParams.Flags.Info.TiledX = 0;
+                            CreateParams.Flags.Info.Tile4  = 1;
+                        }
+                    }
+                }
 
                 //override displayable surfaces to TileX
                 if(GetGmmLibContext()->GetSkuTable().FtrDisplayXTiling)
@@ -236,6 +265,20 @@ bool GmmLib::GmmResourceInfoCommon::CopyClientParams(GMM_RESCREATE_PARAMS &Creat
     Surf.Flags.Info.SVM &&
     !(GetGmmLibContext()->GetSkuTable().FtrWddm2GpuMmu ||
       GetGmmLibContext()->GetSkuTable().FtrWddm2Svm);
+    
+    if (GetGmmLibContext()->GetSkuTable().FtrXe2Compression && 
+		    !(ONE_WAY_COHERENT_COMPRESSION_MODE(GetGmmLibContext()->GetPlatformInfo().Platform.eProductFamily, GetGmmLibContext()->GetWaTable().WaNoCpuCoherentCompression)))
+    {
+        if (!CreateParams.Flags.Info.NotCompressed && CreateParams.Flags.Info.Cacheable)
+        {
+            // Disable compression
+            Surf.Flags.Info.NotCompressed     = 1;
+            Surf.Flags.Gpu.CCS                = 0;
+            Surf.Flags.Gpu.UnifiedAuxSurface  = 0;
+            Surf.Flags.Gpu.IndirectClearColor = 0;
+            Surf.Flags.Gpu.MCS                = 0;
+        }
+    }    
 
 #if !__GMM_KMD__ && LHDM
     if(GetGmmLibContext()->GetWaTable().WaLLCCachingUnsupported)
@@ -660,6 +703,18 @@ uint8_t GMM_STDCALL GmmLib::GmmResourceInfoCommon::ValidateParams()
         }
     }
 
+#ifndef __GMM_KMD__
+    if (GetGmmLibContext()->GetSkuTable().FtrXe2Compression && (GetGmmClientContext() != NULL))
+    {
+        if (((GMM_AIL_STRUCT *)(GetGmmClientContext()->GmmGetAIL()))->AilDisableXe2CompressionRequest)
+        {
+            //Disable Compression at resource level only, However at adapter level FtrXe2Compression could be still enabled.
+            //AilDisableXe2CompressionRequest helps us to acheive this.
+            Surf.Flags.Info.NotCompressed = 1;
+        }
+    }
+#endif
+
     if((GFX_GET_CURRENT_RENDERCORE(pPlatformResource->Platform) < IGFX_GEN8_CORE) &&
        Surf.Flags.Info.TiledW)
     {
@@ -980,6 +1035,14 @@ uint8_t GMM_STDCALL GmmLib::GmmResourceInfoCommon::ValidateParams()
                 goto ERROR_CASE;
             }
             break;
+    }
+
+    if (GetGmmLibContext()->GetSkuTable().FtrXe2Compression && 
+		    !(ONE_WAY_COHERENT_COMPRESSION_MODE(GetGmmLibContext()->GetPlatformInfo().Platform.eProductFamily, GetGmmLibContext()->GetWaTable().WaNoCpuCoherentCompression)) && 
+		    Surf.Flags.Info.Cacheable && !Surf.Flags.Info.NotCompressed)
+    {
+        GMM_ASSERTDPF(0, "Invalid combination Cpu Cacheable and Compression set on a platform");
+        goto ERROR_CASE;
     }
 
     GMM_DPF_EXIT;

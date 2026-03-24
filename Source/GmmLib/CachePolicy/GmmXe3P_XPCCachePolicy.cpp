@@ -1,5 +1,5 @@
 /*==============================================================================
-Copyright(c) 2024 Intel Corporation
+Copyright(c) 2025 Intel Corporation
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files(the "Software"),
 to deal in the Software without restriction, including without limitation
@@ -18,33 +18,37 @@ OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 ============================================================================*/
+
 #include "Internal/Common/GmmLibInc.h"
 #include "External/Common/GmmCachePolicy.h"
-#include "External/Common/CachePolicy/GmmCachePolicyXe2_LPG.h"
+#include "External/Common/CachePolicy/GmmCachePolicyXe3P_XPC.h"
+
 //=============================================================================
 //
-// Function: GmmXe2_LPGCachePolicy::InitCachePolicy()
+// Function: __:GmmXe3P_XPCInitCachePolicy
 //
-// Desc: This function initializes the Xe2 cache policy
+// Desc: This function initializes the cache policy
+//
+// Parameters: pCachePolicy  -> Ptr to array to be populated with the
+//             mapping of usages -> cache settings.
 //
 // Return: GMM_STATUS
 //
 //-----------------------------------------------------------------------------
-GMM_STATUS GmmLib::GmmXe2_LPGCachePolicy::InitCachePolicy()
+GMM_STATUS GmmLib::GmmXe3P_XPCCachePolicy::InitCachePolicy()
 {
     __GMM_ASSERTPTR(pCachePolicy, GMM_ERROR);
-
 #define DEFINE_CACHE_ELEMENT(usage, l3_cc, l3_clos, l1cc, l2cc, l4cc, coherency, igPAT, segov) DEFINE_CP_ELEMENT(usage, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, segov, 0, 0, l1cc, l2cc, l4cc, coherency, l3_cc, l3_clos, igPAT)
 
-#include "GmmXe2_LPGCachePolicy.h"
+#include "GmmXe3P_XPCCachePolicy.h"
 
     SetUpMOCSTable();
     SetupPAT();
 
     // Define index of cache element
-    uint32_t Usage          = 0;
-    uint32_t ReservedPATIdx = 16; /* Rsvd PAT section 16-19 */
-    uint32_t ReservedPATIdxEnd = 20;
+    uint32_t Usage             = 0;
+    uint32_t ReservedPATIdx    = 11; /* Rsvd PAT section 11-22 */
+    uint32_t ReservedPATIdxEnd = 22;
 
 #if (_WIN32 && (_DEBUG || _RELEASE_INTERNAL))
     void *pKmdGmmContext = NULL;
@@ -59,22 +63,16 @@ GMM_STATUS GmmLib::GmmXe2_LPGCachePolicy::InitCachePolicy()
         bool                         CachePolicyError = false;
         int32_t                      PATIdx = -1, CPTblIdx = -1, PATIdxCompressed = -1, CoherentPATIdx = -1;
         uint32_t                     i, j;
-        GMM_XE2_PRIVATE_PAT          UsagePATElement = {0};
+        GMM_XE3P_PRIVATE_PAT         UsagePATElement = {0};
         GMM_CACHE_POLICY_TBL_ELEMENT UsageEle        = {0};
         GMM_PTE_CACHE_CONTROL_BITS   PTE             = {0};
 
         // MOCS data
         {
-
             // Get L3 ,L4 and Convert  GMM indicative values to actual regiser values.
             GetL3L4(&UsageEle, &UsagePATElement, Usage);
             // Convert L1  GMM indicative values to actual regiser values and store into pCachePolicy to return to UMD's.
             SetL1CachePolicy(Usage);
-
-            if ((!pGmmLibContext->GetSkuTable().FtrL3TransientDataFlush) && (UsageEle.L3.PhysicalL3.L3CC == GMM_GFX_PHY_L3_MT_WB_XD))
-            {
-                UsageEle.L3.PhysicalL3.L3CC = GMM_GFX_PHY_L3_MT_WB; // No Transient Flush Support
-            }
 
             /* If MOCS is not needed fall back to Defer to PAT i.e MOCS#0 */
             if (false == UsageEle.L3.PhysicalL3.igPAT)
@@ -101,79 +99,34 @@ GMM_STATUS GmmLib::GmmXe2_LPGCachePolicy::InitCachePolicy()
 
             if (CPTblIdx == -1)
             {
-
                 {
                     /* Invalid MOCS setting Fail the GMM Initialzation */
                     GMM_ASSERTDPF(false, "CRITICAL: Cache Policy Usage value for L3/L4 specified by Client is not defined in Fixed MOCS Table");
                     CachePolicyError = true;
-
                 }
             }
         }
 
-        /*
-            Validate Caching restrictions as below
-            1. MemoryType WB-XD must be used in Non-Coherent and allowed only for displayable surfaces
-            2. Coherent mode(1-way/2-way) must be Memory Type WB
-            3. No 2-way coherency on dGPU
-            4. Memory Type WT is available only for L4 in Non Coherent Mode
-            5. Memory Type UC must be used in Non-Coherent Mode
-        */
 
         // PAT data
         {
-            if (!pGmmLibContext->GetSkuTable().FtrL3TransientDataFlush && (UsagePATElement.Xe2.L3CC == GMM_GFX_PHY_L3_MT_WB_XD))
-            {
-                UsagePATElement.Xe2.L3CC = GMM_GFX_PHY_L3_MT_WB; // No Transient Flush Support
-            }
 
-            /* Find a PATIndex from the PAT table for uncompressed case*/
-            if ((UsagePATElement.Xe2.L4CC == GMM_GFX_PHY_L4_MT_WT) && (UsagePATElement.Xe2.L3CC == GMM_GFX_PHY_L3_MT_WB_XD))
-            {
-
-                // With L3:XD, L4:WT, NC combination
-                if (pGmmLibContext->GetSkuTable().FtrDiscrete)
-                {
-                    // On BMG, L4 is a pass through, demote L4 to UC, keep L3 at XD
-                    PATIdx = PAT6;
-                }
-                else
-                {
-                    // On LNL, L3:XD is not needed
-                    PATIdx = PAT13;
-                }
-            }
-            else
-            {
-                for (i = 0; i <= CurrentMaxPATIndex; i++)
-                {
-                    GMM_PRIVATE_PAT PAT = GetPrivatePATEntry(i);
-                    if (UsagePATElement.Xe2.L4CC == PAT.Xe2.L4CC &&
-                        UsagePATElement.Xe2.Coherency == PAT.Xe2.Coherency &&
-                        UsagePATElement.Xe2.L3CC == PAT.Xe2.L3CC &&
-                        UsagePATElement.Xe2.L3CLOS == PAT.Xe2.L3CLOS &&
-                        false == PAT.Xe2.LosslessCompressionEn)
-                    {
-                        PATIdx = i;
-                        break;
-                    }
-                }
-            }
-
-            /* Find a PATIndex from the PAT table for compressed case*/
             for (i = 0; i <= CurrentMaxPATIndex; i++)
             {
                 GMM_PRIVATE_PAT PAT = GetPrivatePATEntry(i);
-                if (UsagePATElement.Xe2.L4CC == PAT.Xe2.L4CC &&
-                    UsagePATElement.Xe2.Coherency == PAT.Xe2.Coherency &&
-                    UsagePATElement.Xe2.L3CC == PAT.Xe2.L3CC &&
-                    UsagePATElement.Xe2.L3CLOS == PAT.Xe2.L3CLOS &&
-                    true == PAT.Xe2.LosslessCompressionEn)
+                if (UsagePATElement.Xe3P.L4CC == PAT.Xe2.L4CC &&
+                    UsagePATElement.Xe3P.Coherency == PAT.Xe2.Coherency &&
+                    UsagePATElement.Xe3P.L3CC == PAT.Xe2.L3CC &&
+                    UsagePATElement.Xe3P.L3CLOS == PAT.Xe2.L3CLOS &&
+                    false == PAT.Xe2.LosslessCompressionEn)
                 {
-                    PATIdxCompressed = i;
+                    PATIdx = i;
                     break;
                 }
             }
+
+            // Compression is not supported in PAT table, compressed PAT to be same as uncompressed PAT
+            PATIdxCompressed = PATIdx;
 
             if (PATIdx == -1)
             {
@@ -189,8 +142,8 @@ GMM_STATUS GmmLib::GmmXe2_LPGCachePolicy::InitCachePolicy()
             }
 
             /* Find a PATIndex for a coherent uncompressed case, if usage is 2-way or 1-way already, take that, otherwise search for oneway*/
-            if ((UsagePATElement.Xe2.Coherency == GMM_GFX_PHY_COHERENT_ONE_WAY_IA_SNOOP) ||
-                (UsagePATElement.Xe2.Coherency == GMM_GFX_PHY_COHERENT_TWO_WAY_IA_GPU_SNOOP))
+            if ((UsagePATElement.Xe3P.Coherency == GMM_GFX_PHY_COHERENT_ONE_WAY_IA_SNOOP) ||
+                (UsagePATElement.Xe3P.Coherency == GMM_GFX_PHY_COHERENT_TWO_WAY_IA_GPU_SNOOP))
             {
                 //Already coherent
                 CoherentPATIdx = PATIdx;
@@ -201,9 +154,9 @@ GMM_STATUS GmmLib::GmmXe2_LPGCachePolicy::InitCachePolicy()
                 for (i = 0; i <= CurrentMaxPATIndex; i++)
                 {
                     GMM_PRIVATE_PAT PAT = GetPrivatePATEntry(i);
-                    if (UsagePATElement.Xe2.L4CC == PAT.Xe2.L4CC &&
-                        UsagePATElement.Xe2.L3CC == PAT.Xe2.L3CC &&
-                        UsagePATElement.Xe2.L3CLOS == PAT.Xe2.L3CLOS &&
+                    if (UsagePATElement.Xe3P.L4CC == PAT.Xe2.L4CC &&
+                        UsagePATElement.Xe3P.L3CC == PAT.Xe2.L3CC &&
+                        UsagePATElement.Xe3P.L3CLOS == PAT.Xe2.L3CLOS &&
                         GMM_GFX_PHY_COHERENT_ONE_WAY_IA_SNOOP == PAT.Xe2.Coherency)
                     {
                         if ((false == PAT.Xe2.LosslessCompressionEn) && (CoherentPATIdx == -1))
@@ -224,7 +177,7 @@ GMM_STATUS GmmLib::GmmXe2_LPGCachePolicy::InitCachePolicy()
                         GMM_PRIVATE_PAT PAT = GetPrivatePATEntry(i);
                         if (GMM_GFX_PHY_L4_MT_UC == PAT.Xe2.L4CC &&
                             GMM_GFX_PHY_L3_MT_UC == PAT.Xe2.L3CC &&
-                            UsagePATElement.Xe2.L3CLOS == PAT.Xe2.L3CLOS &&
+                            UsagePATElement.Xe3P.L3CLOS == PAT.Xe2.L3CLOS &&
                             GMM_GFX_PHY_COHERENT_ONE_WAY_IA_SNOOP == PAT.Xe2.Coherency)
                         {
                             if ((false == PAT.Xe2.LosslessCompressionEn) && (CoherentPATIdx == -1))
@@ -252,11 +205,11 @@ GMM_STATUS GmmLib::GmmXe2_LPGCachePolicy::InitCachePolicy()
         pCachePolicy[Usage].MemoryObjectOverride.XE_HP.EncryptedData = 0;
         pCachePolicy[Usage].Override                                 = ALWAYS_OVERRIDE;
 
+        //printf("Usage: [%d], PAT: [%d], Comp:[%d], MOCSIdx:[%d] \n", Usage, PATIdx, PATIdxCompressed, CPTblIdx);
 
         if (CachePolicyError)
         {
             GMM_ASSERTDPF(false, "Cache Policy Init Error: Invalid Cache Programming ");
-
             return GMM_INVALIDPARAM;
         }
     }
@@ -267,93 +220,74 @@ GMM_STATUS GmmLib::GmmXe2_LPGCachePolicy::InitCachePolicy()
 //
 // Function: __:GetL3L4
 //
-// Desc: This function // converting  GMM indicative values to actual register values
+// Desc: This function converts GMM indicative values to actual register values
 //
 // Parameters:
 //
 // Return: GMM_STATUS
 //
 //-----------------------------------------------------------------------------
-
-void GmmLib::GmmXe2_LPGCachePolicy::GetL3L4(GMM_CACHE_POLICY_TBL_ELEMENT *pUsageEle, GMM_XE2_PRIVATE_PAT *pUsagePATElement, uint32_t Usage)
+void GmmLib::GmmXe3P_XPCCachePolicy::GetL3L4(GMM_CACHE_POLICY_TBL_ELEMENT *pUsageEle, GMM_XE3P_PRIVATE_PAT *pUsagePATElement, uint32_t Usage)
 {
 
     //MOCS
     pUsageEle->L3.PhysicalL3.Reserved0 = pUsageEle->L3.PhysicalL3.Reserved = 0;
     //L3CLOS
-    pUsageEle->L3.PhysicalL3.L3CLOS = 0; 
+    pUsageEle->L3.PhysicalL3.L3CLOS = 0;
     //IgPAT
     pUsageEle->L3.PhysicalL3.igPAT = pCachePolicy[Usage].IgnorePAT;
 
 
     //PAT
-    pUsagePATElement->Xe2.Reserved1 = 0;
-    pUsagePATElement->Xe2.Reserved2 = 0;
+    pUsagePATElement->Xe3P.Reserved1 = 0;
+    pUsagePATElement->Xe3P.Reserved2 = 0;
 
-    pUsagePATElement->Xe2.L3CLOS = 0; 
+    pUsagePATElement->Xe3P.L3CLOS = 0;
+    
     switch (pCachePolicy[Usage].L3CC)
     {
     case GMM_UC:
         pUsageEle->L3.PhysicalL3.L3CC = GMM_GFX_PHY_L3_MT_UC;
-        pUsagePATElement->Xe2.L3CC    = GMM_GFX_PHY_L3_MT_UC;
+        pUsagePATElement->Xe3P.L3CC   = GMM_GFX_PHY_L3_MT_UC;
         break;
     case GMM_WB:
         pUsageEle->L3.PhysicalL3.L3CC = GMM_GFX_PHY_L3_MT_WB;
-        pUsagePATElement->Xe2.L3CC    = GMM_GFX_PHY_L3_MT_WB;
-        break;
-    case GMM_WBTD:
-        pUsageEle->L3.PhysicalL3.L3CC = GMM_GFX_PHY_L3_MT_WB_XD; // Transient:Display on Xe2
-        pUsagePATElement->Xe2.L3CC    = GMM_GFX_PHY_L3_MT_WB_XD;
+        pUsagePATElement->Xe3P.L3CC   = GMM_GFX_PHY_L3_MT_WB;
         break;
     default:
         pUsageEle->L3.PhysicalL3.L3CC = GMM_GFX_PHY_L3_MT_UC;
-        pUsagePATElement->Xe2.L3CC    = GMM_GFX_PHY_L3_MT_UC;
+        pUsagePATElement->Xe3P.L3CC   = GMM_GFX_PHY_L3_MT_UC;
     }
 
     switch (pCachePolicy[Usage].L4CC)
     {
     case GMM_UC:
         pUsageEle->L3.PhysicalL3.L4CC = GMM_GFX_PHY_L4_MT_UC;
-        pUsagePATElement->Xe2.L4CC    = GMM_GFX_PHY_L4_MT_UC;
+        pUsagePATElement->Xe3P.L4CC   = GMM_GFX_PHY_L4_MT_UC;
         break;
     case GMM_WB:
         pUsageEle->L3.PhysicalL3.L4CC = GMM_GFX_PHY_L4_MT_WB;
-        pUsagePATElement->Xe2.L4CC    = GMM_GFX_PHY_L4_MT_WB;
-        break;
-    case GMM_WT:
-        pUsageEle->L3.PhysicalL3.L4CC = GMM_GFX_PHY_L4_MT_WT;
-        pUsagePATElement->Xe2.L4CC    = GMM_GFX_PHY_L4_MT_WT;
+        pUsagePATElement->Xe3P.L4CC   = GMM_GFX_PHY_L4_MT_WB;
         break;
     default:
         pUsageEle->L3.PhysicalL3.L4CC = GMM_GFX_PHY_L4_MT_UC;
-        pUsagePATElement->Xe2.L4CC    = GMM_GFX_PHY_L4_MT_UC;
+        pUsagePATElement->Xe3P.L4CC   = GMM_GFX_PHY_L4_MT_UC;
     }
 
     switch (pCachePolicy[Usage].Coherency)
     {
     case GMM_NON_COHERENT_NO_SNOOP:
-        pUsagePATElement->Xe2.Coherency = GMM_GFX_NON_COHERENT_NO_SNOOP;
+        pUsagePATElement->Xe3P.Coherency = GMM_GFX_NON_COHERENT_NO_SNOOP;
         break;
     case GMM_COHERENT_ONE_WAY_IA_SNOOP:
-        pUsagePATElement->Xe2.Coherency = GMM_GFX_COHERENT_ONE_WAY_IA_SNOOP;
+        pUsagePATElement->Xe3P.Coherency = GMM_GFX_COHERENT_ONE_WAY_IA_SNOOP;
         break;
     case GMM_COHERENT_TWO_WAY_IA_GPU_SNOOP:
-        pUsagePATElement->Xe2.Coherency = GMM_GFX_COHERENT_TWO_WAY_IA_GPU_SNOOP;
+        pUsagePATElement->Xe3P.Coherency = GMM_GFX_COHERENT_TWO_WAY_IA_GPU_SNOOP;
         break;
     default:
-        pUsagePATElement->Xe2.Coherency = GMM_GFX_NON_COHERENT_NO_SNOOP;
+        pUsagePATElement->Xe3P.Coherency = GMM_GFX_NON_COHERENT_NO_SNOOP;
         break;
-    }
-
-    if (pGmmLibContext->GetWaTable().Wa_14018443005 &&
-        (pCachePolicy[Usage].L3CC == GMM_UC) &&
-        (ISWA_1401844305USAGE(Usage)) &&
-        (pGmmLibContext->GetClientType() != GMM_KMD_VISTA) &&
-        (pGmmLibContext->GetClientType() != GMM_OCL_VISTA))
-    {
-        pUsageEle->L3.PhysicalL3.L3CC = GMM_GFX_PHY_L3_MT_WB;
-        pUsagePATElement->Xe2.L3CC    = GMM_GFX_PHY_L3_MT_WB;
-        pCachePolicy[Usage].L3CC      = GMM_WB;
     }
 }
 
@@ -364,11 +298,11 @@ void GmmLib::GmmXe2_LPGCachePolicy::GetL3L4(GMM_CACHE_POLICY_TBL_ELEMENT *pUsage
 ///
 /// @param[in]     pResInfo: Resource info for resource, can be NULL.
 /// @param[in]     Usage: Current usage for resource.
-/// @param[in]     pCompressionEnabl: for Xe2 compression parameter
-/// @param[in]     IsCpuCacheable: Indicates Cacheability
+/// @param[Optional]    Usage: for Xe3P-XPC compression parameter
+///
 /// @return        PATIndex
 /////////////////////////////////////////////////////////////////////////////////////
-uint32_t GMM_STDCALL GmmLib::GmmXe2_LPGCachePolicy::CachePolicyGetPATIndex(GMM_RESOURCE_INFO *pResInfo, GMM_RESOURCE_USAGE_TYPE Usage, bool *pCompressionEnable, bool IsCpuCacheable)
+uint32_t GMM_STDCALL GmmLib::GmmXe3P_XPCCachePolicy::CachePolicyGetPATIndex(GMM_RESOURCE_INFO *pResInfo, GMM_RESOURCE_USAGE_TYPE Usage, bool *pCompressionEnable, bool IsCpuCacheable)
 {
     __GMM_ASSERT(pGmmLibContext->GetCachePolicyElement(Usage).Initialized);
 
@@ -400,20 +334,10 @@ uint32_t GMM_STDCALL GmmLib::GmmXe2_LPGCachePolicy::CachePolicyGetPATIndex(GMM_R
     // requested compressed and coherent
     if (CompressionEnable && IsCpuCacheable)
     {
-        if (ONE_WAY_COHERENT_COMPRESSION_MODE(pGmmLibContext->GetPlatformInfo().Platform.eProductFamily, pGmmLibContext->GetWaTable().WaNoCpuCoherentCompression))
-        {
-#define COHERENT_COMPRESSED_PATIDX 16
-            // return coherent compressed PAT which is 16
-            ReturnPATIndex    = COHERENT_COMPRESSED_PATIDX;
-            CompressionEnable = true;
-        }
-        else
-        {
-            // return coherent uncompressed
-            ReturnPATIndex    = CoherentPATIndex;
-            CompressionEnable = false;
-            GMM_ASSERTDPF(false, "For Coherent Compressed resources combination on Xe2, respecting the coherency and returning CoherentPATIndex");
-        }
+        // return coherent uncompressed
+        ReturnPATIndex    = CoherentPATIndex;
+        CompressionEnable = false;
+        GMM_ASSERTDPF(false, "Coherent Compressed is not supported. However, respecting the coherency and returning CoherentPATIndex");
     }
     // requested compressed only
     else if (CompressionEnable)
@@ -476,16 +400,14 @@ uint32_t GMM_STDCALL GmmLib::GmmXe2_LPGCachePolicy::CachePolicyGetPATIndex(GMM_R
 // Return: GMM_STATUS
 //
 //-----------------------------------------------------------------------------
-void GmmLib::GmmXe2_LPGCachePolicy::SetUpMOCSTable()
+void GmmLib::GmmXe3P_XPCCachePolicy::SetUpMOCSTable()
 {
     GMM_CACHE_POLICY_TBL_ELEMENT *pCachePolicyTlbElement = &(pGmmLibContext->GetCachePolicyTlbElement()[0]);
 
 #define L4_WB (0x0)
-#define L4_WT (0x1)
 #define L4_UC (0x3)
 
 #define L3_WB (0x0)
-#define L3_XD (pGmmLibContext->GetSkuTable().FtrL3TransientDataFlush ? 0x1 : 0x0)
 #define L3_UC (0x3)
 
 #define GMM_DEFINE_MOCS(indx, L4Caching, L3Caching, L3ClassOfService, ignorePAT) \
@@ -499,16 +421,16 @@ void GmmLib::GmmXe2_LPGCachePolicy::SetUpMOCSTable()
 
     // clang-format off
     // Default MOCS Table
-    for(uint32_t j = 0; j < GMM_XE2_NUM_MOCS_ENTRIES; j++)
+    for(uint32_t j = 0; j < GMM_XE3P_NUM_MOCS_ENTRIES; j++)
     {   //               Index            CachingPolicy   L3Caching      L3ClassOfService    ignorePAT
         GMM_DEFINE_MOCS( j,               L4_UC,          L3_UC,             0          ,     0  )
     }
 
     //             Index    L4 CachingPolicy   L3 CachingPolicy   L3 CLOS   ignorePAT
     GMM_DEFINE_MOCS( 0      , L4_UC              , L3_WB           , 0     , 0)   // Defer to PAT
-    GMM_DEFINE_MOCS( 1      , L4_UC              , L3_WB           , 0     , 1)   // L3
-    GMM_DEFINE_MOCS( 2      , L4_WB              , L3_UC           , 0     , 1)   // L4
-    GMM_DEFINE_MOCS( 3      , L4_UC              , L3_UC           , 0     , 1)   // UC
+    GMM_DEFINE_MOCS( 1      , L4_UC              , L3_UC           , 0     , 1)   // UC
+    GMM_DEFINE_MOCS( 2      , L4_UC              , L3_WB           , 0     , 1)   // L3
+    GMM_DEFINE_MOCS( 3      , L4_WB              , L3_UC           , 0     , 1)   // L4
     GMM_DEFINE_MOCS( 4      , L4_WB              , L3_WB           , 0     , 1)   // L3+L4
 
     CurrentMaxMocsIndex = 4;
@@ -518,11 +440,9 @@ void GmmLib::GmmXe2_LPGCachePolicy::SetUpMOCSTable()
 
 #undef GMM_DEFINE_MOCS
 #undef L4_WB
-#undef L4_WT
 #undef L4_UC
 
 #undef L3_WB
-#undef L3_XD
 #undef L3_UC
 }
 
@@ -538,29 +458,26 @@ void GmmLib::GmmXe2_LPGCachePolicy::SetUpMOCSTable()
 // Return: GMM_STATUS
 //
 //-----------------------------------------------------------------------------
-GMM_STATUS GmmLib::GmmXe2_LPGCachePolicy::SetupPAT()
+GMM_STATUS GmmLib::GmmXe3P_XPCCachePolicy::SetupPAT()
 {
     GMM_PRIVATE_PAT *pPATTlbElement = &(pGmmLibContext->GetPrivatePATTable()[0]);
 
 #define L4_WB (0x0)
-#define L4_WT (0x1)
 #define L4_UC (0x3)
 
 #define L3_WB (0x0)
-#define L3_XD (pGmmLibContext->GetSkuTable().FtrL3TransientDataFlush ? 0x1 : 0x0)
 #define L3_UC (0x3)
-#define L3_XA (0x2) // WB Transient App
 
-#define GMM_DEFINE_PAT_ELEMENT(indx, Coh, L4Caching, L3Caching, L3ClassOfService, CompressionEn, NoCachePromote) \
-    {                                                                                                            \
-        pPATTlbElement[indx].Xe2.Coherency             = Coh;                                                    \
-        pPATTlbElement[indx].Xe2.L4CC                  = L4Caching;                                              \
-        pPATTlbElement[indx].Xe2.Reserved1             = 0;                                                      \
-        pPATTlbElement[indx].Xe2.Reserved2             = 0;                                                      \
-        pPATTlbElement[indx].Xe2.L3CC                  = L3Caching;                                              \
-        pPATTlbElement[indx].Xe2.L3CLOS                = L3ClassOfService;                                       \
-        pPATTlbElement[indx].Xe2.LosslessCompressionEn = CompressionEn;                                          \
-        pPATTlbElement[indx].Xe2.NoCachingPromote      = NoCachePromote;                                         \
+#define GMM_DEFINE_PAT_ELEMENT(indx, Coh, L4Caching, L3Caching, L3ClassOfService, NoCachePromote) \
+    {                                                                                             \
+        pPATTlbElement[indx].Xe2.Coherency             = Coh;                                     \
+        pPATTlbElement[indx].Xe2.L4CC                  = L4Caching;                               \
+        pPATTlbElement[indx].Xe2.Reserved1             = 0;                                       \
+        pPATTlbElement[indx].Xe2.Reserved2             = 0;                                       \
+        pPATTlbElement[indx].Xe2.L3CC                  = L3Caching;                               \
+        pPATTlbElement[indx].Xe2.L3CLOS                = L3ClassOfService;                        \
+        pPATTlbElement[indx].Xe2.LosslessCompressionEn = 0;                                       \
+        pPATTlbElement[indx].Xe2.NoCachingPromote      = NoCachePromote;                          \
     }
 
     // clang-format off
@@ -568,66 +485,49 @@ GMM_STATUS GmmLib::GmmXe2_LPGCachePolicy::SetupPAT()
     // Default PAT Table
     // 32 nos
     for (uint32_t i = 0; i < (NumPATRegisters); i++)
-    {   //                      Index  Coherency  CachingPolicy  L3Caching  L3ClassOfService  CompressionEn  NoCachingPromote
-        GMM_DEFINE_PAT_ELEMENT( i,     3,         L4_UC,         L3_UC,     0,                0,             0);
+    {   //                      Index  Coherency  CachingPolicy  L3Caching  L3ClassOfService  NoCachingPromote
+        GMM_DEFINE_PAT_ELEMENT( i,     3,         L4_UC,         L3_UC,     0,                0);
     }
 
     // Fixed PAT Table
-    //                      Index  Coherency  L4 CachingPolicy   L3 CachingPolicy   L3 CLOS      CompressionEn   NoCachingPromote
+    //                      Index  Coherency  L4 CachingPolicy   L3 CachingPolicy   L3 CLOS      NoCachingPromote
     //Group: GGT/PPGTT[4]
-    GMM_DEFINE_PAT_ELEMENT( 0      , 0      , L4_UC              , L3_WB           , 0          , 0             , 0)    //          | L3_WB 
-    GMM_DEFINE_PAT_ELEMENT( 1      , 2      , L4_UC              , L3_WB           , 0          , 0             , 0)    //          | L3_WB | 1 way coherent
-    GMM_DEFINE_PAT_ELEMENT( 2      , 3      , L4_UC              , L3_WB           , 0          , 0             , 0)    //          | L3_WB | 2 way coherent
-    GMM_DEFINE_PAT_ELEMENT( 3      , 0      , L4_UC              , L3_UC           , 0          , 0             , 0)    // **UC   
-    //Group: 1 way Coh
-    GMM_DEFINE_PAT_ELEMENT( 4      , 2      , L4_WB              , L3_UC           , 0          , 0             , 0)    // L4_WB            | 1 way coherent
-    GMM_DEFINE_PAT_ELEMENT( 5      , 2      , L4_UC              , L3_UC           , 0          , 0             , 0)    // **UC             | 1 way coherent
-    //Group: Compression Disabled
-    GMM_DEFINE_PAT_ELEMENT( 6      , 0      , L4_UC              , L3_XD           , 0          , 0             , 1)    //          | L3_XD 
-    GMM_DEFINE_PAT_ELEMENT( 7      , 3      , L4_WB              , L3_UC           , 0          , 0             , 0)    // L4_WB            | 2 way coherent
-    GMM_DEFINE_PAT_ELEMENT( 8      , 0      , L4_WB              , L3_UC           , 0          , 0             , 0)    // L4_WB  
-    //Group: Compression Enabled
-    GMM_DEFINE_PAT_ELEMENT( 9      , 0      , L4_UC              , L3_WB           , 0          , 1             , 0)    //          | L3_WB | Comp 
-    GMM_DEFINE_PAT_ELEMENT( 10     , 0      , L4_WB              , L3_UC           , 0          , 1             , 0)    // L4_WB            | Comp
-    GMM_DEFINE_PAT_ELEMENT( 11     , 0      , L4_UC              , L3_XD           , 0          , 1             , 1)    //          | L3_XD | Comp 
-    GMM_DEFINE_PAT_ELEMENT( 12     , 0      , L4_UC              , L3_UC           , 0          , 1             , 0)    // **UC             | Comp 
-
-    GMM_DEFINE_PAT_ELEMENT( 13     , 0      , L4_WB              , L3_WB           , 0          , 0             , 0)     // L4_WB    | L3_WB 
-    GMM_DEFINE_PAT_ELEMENT( 14     , 0      , L4_WB              , L3_WB           , 0          , 1             , 0)    // L4_WB    | L3_WB | Comp
-    GMM_DEFINE_PAT_ELEMENT( 15     , 0      , L4_WT              , L3_XD           , 0          , 1             , 1)    // L4_WT    | L3_XD | Comp 
-    
-    //Reserved 16-19
+    GMM_DEFINE_PAT_ELEMENT( 0      , 0      , L4_WB              , L3_WB           , 0           , 0)    //          | L3_WB | L4_WB
+    GMM_DEFINE_PAT_ELEMENT( 1      , 2      , L4_WB              , L3_WB           , 0           , 0)    //          | L3_WB | L4_WB | 1 way coherent
+    GMM_DEFINE_PAT_ELEMENT( 2      , 3      , L4_WB              , L3_WB           , 0           , 0)    //          | L3_WB | L4_WB | 2 way coherent
+    GMM_DEFINE_PAT_ELEMENT( 3      , 0      , L4_UC              , L3_UC           , 0           , 0)    //          | UC   
+    //Group: Other UC
+    GMM_DEFINE_PAT_ELEMENT( 4      , 2      , L4_UC              , L3_UC           , 0           , 0)    //          | UC | 1 way coherent
+    //Group L4 only
+    GMM_DEFINE_PAT_ELEMENT( 5      , 0      , L4_WB              , L3_UC           , 0           , 0)    //          | L4_WB
+    GMM_DEFINE_PAT_ELEMENT( 6      , 2      , L4_WB              , L3_UC           , 0           , 0)    //          | L4_WB | 1 way coherent
+    GMM_DEFINE_PAT_ELEMENT( 7      , 3      , L4_WB              , L3_UC           , 0           , 0)    //          | L4_WB | 2 way coherent
+    //Group L3 only
+    GMM_DEFINE_PAT_ELEMENT( 8      , 0      , L4_UC              , L3_WB           , 0           , 0)    //          | L3_WB  
+    GMM_DEFINE_PAT_ELEMENT( 9      , 2      , L4_UC              , L3_WB           , 0           , 0)    //          | L3_WB | 1 way coherent 
+    GMM_DEFINE_PAT_ELEMENT( 10     , 3      , L4_UC              , L3_WB           , 0           , 0)    //          | L3_WB | 2 way coherent
+    // Reserved 11 - 22
     //Group: CLOS1
-    GMM_DEFINE_PAT_ELEMENT( 20      , 0      , L4_UC             , L3_WB           , 1          , 0             , 0)    //          | L3_WB   
-    GMM_DEFINE_PAT_ELEMENT( 21      , 0      , L4_UC             , L3_WB           , 1          , 1             , 0)    //          | L3_WB | Comp 
-    GMM_DEFINE_PAT_ELEMENT( 22      , 2      , L4_UC             , L3_WB           , 1          , 0             , 0)    //          | L3_WB | 1 way coherent
-    GMM_DEFINE_PAT_ELEMENT( 23      , 3      , L4_UC             , L3_WB           , 1          , 0             , 0)    //          | L3_WB | 2 way coherent 
-    //Group:CLOS2=>Clone of CLOS1
-    GMM_DEFINE_PAT_ELEMENT( 24      , 0      , L4_UC             , L3_WB           , 2          , 0             , 0)    //          | L3_WB   
-    GMM_DEFINE_PAT_ELEMENT( 25      , 0      , L4_UC             , L3_WB           , 2          , 1             , 0)    //          | L3_WB | Comp 
-    GMM_DEFINE_PAT_ELEMENT( 26      , 2      , L4_UC             , L3_WB           , 2          , 0             , 0)    //          | L3_WB | 1 way coherent
-    GMM_DEFINE_PAT_ELEMENT( 27      , 3      , L4_UC             , L3_WB           , 2          , 0             , 0)    //          | L3_WB | 2 way coherent 
-    //Group:CLOS3=>Clone of CLOS1
-    GMM_DEFINE_PAT_ELEMENT( 28      , 0      , L4_UC             , L3_WB           , 3          , 0             , 0)    //          | L3_WB    
-    GMM_DEFINE_PAT_ELEMENT( 29      , 0      , L4_UC             , L3_WB           , 3          , 1             , 0)    //          | L3_WB | Comp 
-    GMM_DEFINE_PAT_ELEMENT( 30      , 2      , L4_UC             , L3_WB           , 3          , 0             , 0)    //          | L3_WB | 1 way coherent
-    GMM_DEFINE_PAT_ELEMENT( 31      , 3      , L4_UC             , L3_WB           , 3          , 0             , 0)    //          | L3_WB | 2 way coherent 
-
+    GMM_DEFINE_PAT_ELEMENT( 23     , 0      , L4_WB              , L3_WB           , 1           , 0)    //          | L3_WB | L4_WB  
+    GMM_DEFINE_PAT_ELEMENT( 24     , 2      , L4_WB              , L3_WB           , 1           , 0)    //          | L3_WB | L4_WB | 1 way coherent  
+    GMM_DEFINE_PAT_ELEMENT( 25     , 3      , L4_WB              , L3_WB           , 1           , 0)    //          | L3_WB | L4_WB | 2 way coherent 
+    //Group: CLOS2
+    GMM_DEFINE_PAT_ELEMENT( 26     , 0      , L4_WB              , L3_WB           , 2           , 0)    //          | L3_WB | L4_WB  
+    GMM_DEFINE_PAT_ELEMENT( 27     , 2      , L4_WB              , L3_WB           , 2           , 0)    //          | L3_WB | L4_WB | 1 way coherent  
+    GMM_DEFINE_PAT_ELEMENT( 28     , 3      , L4_WB              , L3_WB           , 2           , 0)    //          | L3_WB | L4_WB | 2 way coherent
+    //Group: CLOS3
+    GMM_DEFINE_PAT_ELEMENT( 29     , 0      , L4_WB              , L3_WB           , 3           , 0)    //          | L3_WB | L4_WB  
+    GMM_DEFINE_PAT_ELEMENT( 30     , 2      , L4_WB              , L3_WB           , 3           , 0)    //          | L3_WB | L4_WB | 1 way coherent  
+    GMM_DEFINE_PAT_ELEMENT( 31     , 3      , L4_WB              , L3_WB           , 3           , 0)    //          | L3_WB | L4_WB | 2 way coherent
+    
     CurrentMaxPATIndex = 31;
-
-    if (ONE_WAY_COHERENT_COMPRESSION_MODE(pGmmLibContext->GetPlatformInfo().Platform.eProductFamily, pGmmLibContext->GetWaTable().WaNoCpuCoherentCompression))
-    {
-        GMM_DEFINE_PAT_ELEMENT( 16      , 2      , L4_UC              , L3_WB           , 0          , 1             , 0)    //          | L3_WB | 1 way coherent | Compression
-    }
 
 // clang-format on
 #undef GMM_DEFINE_PAT
 #undef L4_WB
-#undef L4_WT
 #undef L4_UC
 
 #undef L3_WB
-#undef L3_XD
 #undef L3_UC
     return GMM_SUCCESS;
 }

@@ -61,6 +61,11 @@ void CTestXe_LPGCachePolicy::SetUpXe_LPGVariant(PRODUCT_FAMILY platform)
         GfxPlatform.eRenderCoreFamily = IGFX_XE_HPG_CORE;
     }
 
+    if (platform == IGFX_NVL_XE3G)
+    {
+        GfxPlatform.eRenderCoreFamily = IGFX_XE3_CORE;
+    }
+
     pGfxAdapterInfo = (ADAPTER_INFO *)malloc(sizeof(ADAPTER_INFO));
     if(pGfxAdapterInfo)
     {
@@ -128,6 +133,16 @@ TEST_F(CTestXe_LPGCachePolicy, TestXe2_LPGCachePolicy_FtrL4CacheEnabled)
 
     TearDownXe_LPGVariant();
 }
+
+TEST_F(CTestXe_LPGCachePolicy, TestXe3CachePolicy_FtrL4CacheEnabled)
+{
+    SetUpXe_LPGVariant(IGFX_NVL_XE3G);
+    CheckXe2_HPGVirtualL3CachePolicy();
+    CheckPAT(); // Has both L3 and PAT within
+    Check_Xe2_HPG_PATCompressed();
+    TearDownXe_LPGVariant();
+}
+
 void CTestXe_LPGCachePolicy::CheckVirtualL3CachePolicy()
 {
     const uint32_t L4_WB_CACHEABLE = 0x0;

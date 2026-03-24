@@ -1,5 +1,5 @@
 /*==============================================================================
-Copyright(c) 2024 Intel Corporation
+Copyright(c) 2025 Intel Corporation
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files(the "Software"),
 to deal in the Software without restriction, including without limitation
@@ -18,6 +18,7 @@ OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 ============================================================================*/
+
 #include "GmmCachePolicyConditionals.h"
 
 #define _SN        0x1
@@ -25,8 +26,6 @@ OTHER DEALINGS IN THE SOFTWARE.
 #define _WT        0x2
 #define _L1_WB     0x2
 #define dGPU       SKU(FtrDiscrete)
-#define iGPU       (!dGPU)
-#define L4_IgPAT   (iGPU & (GFX_GET_CURRENT_PRODUCT((pGmmLibContext->GetPlatformInfo()).Platform) < IGFX_PTL)) // L4 Uncached and IgPAT = 0
 
 #if (_DEBUG || _RELEASE_INTERNAL)
 #define _WA_WB_Emu (WA(Wa_EmuMufasaSupportOnBmg))
@@ -34,9 +33,6 @@ OTHER DEALINGS IN THE SOFTWARE.
 #define _WA_WB_Emu 0
 #endif
 
-// GmmLib can apply 2Way WA to GMM_RESOURCE_USAGE_HW_CONTEXT.
-#define _WA_2W (WA(Wa_14018976079) || WA(Wa_14018984349)) ? 2 : 0
-#define _L3_P  ((_WA_2W == 2) ? 1 : 0) // L3 Promotion to WB if 2Way Coh WA is set
 
 // clang-format off
 //typedef enum GMM_CACHING_POLICY_REC
@@ -59,20 +55,31 @@ OTHER DEALINGS IN THE SOFTWARE.
 // Cache Policy Definition
 // L3_CLOS      : L3 class of service (0,1,2,3)
 // IgPAT        : Ignore PAT 1 = Override by MOCS, 0 = Defer to PAT
+// 
 //Macros for segment-preference
 #define NoP                          0x0
-//Wa_14018443005
-#define COMPRESSED_PAT_WITH_L4WB_L3UC_0 PAT10
-#define COMPRESSED_PAT_WITH_L4WB_L3WB_0 PAT14
-#define COMPRESSED_PAT_WITH_L4UC_L3UC_0 PAT12
-#define COMPRESSED_PAT_WITH_L4UC_L3WB_0 PAT9
+#define NonLocal_Only                0x1
+#define Local_Only                   0x2
+#define LMemBarOrNonLocal_Only       0x3
+#define SystemOverflowToLocal        0x4
+#define NonLocalOnlyOnLimitedLmemBar 0x5
+#define LMemBar_Preferred            0x6
+#define LMemBar_Indifferent          0x7
 
-#define ISWA_1401844305USAGE(usage)       ((Usage == GMM_RESOURCE_USAGE_BLT_SOURCE) ||      \
+#define ISWA_1401844305USAGE(usage)       ((Usage == GMM_USAGE_COPY_SOURCE) ||              \
+                                           (Usage == GMM_USAGE_COPY_DEST) ||                \
+                                           (Usage == GMM_RESOURCE_USAGE_BLT_SOURCE) ||      \
                                            (Usage == GMM_RESOURCE_USAGE_BLT_DESTINATION) || \
                                            (Usage == GMM_RESOURCE_USAGE_COPY_SOURCE) ||     \
                                            (Usage == GMM_RESOURCE_USAGE_COPY_DEST))
+
+// SegOv: Override segment preference : 0= Default ie no override, 1=NonLocal_Only ie NonLocal Only, 2=Local_Only ie Local Only (NonCpuVisible Bar on Small Lmem Configs else CpuVisble Bar) 
+// SegOv: 3=LMemBarOrNonLocalOnly ie CpuVisible Bar but overflow to System, 4=SystemOverflowToLocal ie System but overflow to Local,
+// SegOV: 5=NonLocalOnlyOnLimitedLmemBar ie System Only on Small Lmem Configs, 
+// SegOV: 6=LMemBarPreferred ie CpuVisible Bar overflow to NonCPUVisible bar overlow to System
+// SegOV: 7= LMemBarIndifferent ie NonCPUVisible Bar overflow to System)
 //******************************************************************************************************************************************************************/
-//                   USAGE TYPE                                                               L3_CC, L3_CLOS, L1CC,   L2CC,   L4CC,     Coherency,   IgPAT,  SegOv)
+//                   USAGE TYPE                                                               L3_CC, L3_CLOS, L1CC,   L2CC,   L4CC,     Coherency, IgPAT, SegOv)
 /*******************************************************************************************************************************************************************/
 // KMD Usages
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_BATCH_BUFFER                                          ,  0,     0,     0,      0    ,  0			,  0     , 1,    NoP);
@@ -82,11 +89,11 @@ DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_CURSOR                                  
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DISPLAY_STATIC_IMG_FOR_SMOOTH_ROTATION_BUFFER         ,  3,     0,     0,      0    ,  0			,  0     , 0,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DUMMY_PAGE                                            ,  0,     0,     0,      0    ,  0			,  0     , 1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_GDI_SURFACE                                           ,  1,     0,     0,      0    ,  0			,  0     , 1,    NoP);
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_GENERIC_KMD_RESOURCE                                  ,  _L3_P,	0,     0,      0    ,  0    		        ,  _WA_2W, 1,    NoP);
+DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_GENERIC_KMD_RESOURCE                                  ,  0,	    0,     0,      0    ,  0    		,  0     , 1,    NoP);
 // GMM_RESOURCE_USAGE_GFX_RING is only used if WaEnableRingHostMapping is enabled .
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_GFX_RING                                              ,  0,     0,     0,      0    ,  0			,  0     , 1,	  NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_GTT_TRANSFER_REGION                                   ,  0,     0,     0,      0    ,  0			,  0     , 1,	  NoP);
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_HW_CONTEXT                                            ,  _L3_P,	0,     0,      0    ,  0			,  _WA_2W, 1,     NoP);
+DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_HW_CONTEXT                                            ,  0,     0,     0,	   0    ,  0			,  0     , 1,     NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_STATE_MANAGER_KERNEL_STATE                            ,  0,     0,     0,      0    ,  0			,  0     , 1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_KMD_STAGING_SURFACE                                   ,  1,     0,     0,      0    ,  0			,  0     , 1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_MBM_BUFFER                                            ,  0,     0,     0,      0    ,  0			,  0     , 1,    NoP);
@@ -132,10 +139,10 @@ DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_INDEX_BUFFER_L3_CACHED                  
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_MCS                                                   ,  1,     0,     0,      0    , 0		,  0     ,   1,    NoP); 
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_PUSH_CONSTANT_BUFFER                                  ,  1,     0,     0,      0    , 0		,  0     ,   1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_PULL_CONSTANT_BUFFER                                  ,  1,     0,     5,      0    , 0		,  0     ,   1,    NoP);
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_QUERY                                                 ,  _WA_WB_Emu,     0,     0,      0    , 0		,  1     ,   1,    NoP);
+DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_QUERY                                                 ,  _WA_WB_Emu,     0,     0,      0    , 0		,  1     ,   1,    NoP); 
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_RENDER_TARGET                                         ,  1,     0,     0,      0    , 0		,  0     ,   1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_SHADER_RESOURCE                                       ,  1,     0,     5,      0    , 0		,  0     ,   1,    NoP);
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_STAGING                                               ,  _WA_WB_Emu,     0,     0,      0    , 0		,  1     ,   1,    NoP);
+DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_STAGING                                               ,  _WA_WB_Emu,     0,     0,      0    , 0		,  1     ,   1,    NoP);  
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_STENCIL_BUFFER                                        ,  1,     0,     0,      0    , 0		,  0     ,   1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_STREAM_OUTPUT_BUFFER                                  ,  1,     0,     0,      0    , 0		,  0     ,   1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_TILE_POOL                                             ,  1,     0,     0,      0    , 0		,  0     ,   1,    NoP);
@@ -210,7 +217,7 @@ DEFINE_CACHE_ELEMENT(MHW_RESOURCE_USAGE_Sfc_IefLineBufferSurface,               
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_BUFFER                                            ,  1,     0,      0,      0    , 0		,  0       ,  1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_BUFFER_CONST                                      ,  1,     0,      5,      0    , 0		,  0       ,  1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_BUFFER_CSR_UC                                     ,  0,     0,      0,      0    , 0		,  0       ,  1,    NoP);
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_BUFFER_CACHELINE_MISALIGNED                       , _L3_P,     0,      0,      0    , 0		,  _WA_2W      ,  1,    NoP);
+DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_BUFFER_CACHELINE_MISALIGNED                       ,  0,     0,      0,      0    , 0		,  0       ,  1,    NoP); 
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_IMAGE                                             ,  1,     0,      0,      0    , 0		,  0       ,  1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_INLINE_CONST                                      ,  1,     0,      0,      0    , 0		,  0       ,  1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_INLINE_CONST_HDC                                  ,  1,     0,      5,      0    , 0		,  0       ,  1,    NoP);
@@ -219,7 +226,7 @@ DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_PRIVATE_MEM                         
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_PRINTF_BUFFER                                     ,  1,     0,      0,      0    , 0		,  0       ,  1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_STATE_HEAP_BUFFER                                 ,  1,     0,      0,      0    , 0		,  0       ,  1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER                              ,  1,     0,      0,      0    , 0		,  1       ,  1,    NoP);
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER_CACHELINE_MISALIGNED         , _L3_P,     0,      0,      0    , 0		,  _WA_2W       ,  1,    NoP);
+DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_SYSTEM_MEMORY_BUFFER_CACHELINE_MISALIGNED         ,  0,     0,      0,      0    , 0		,  0       ,  1,    NoP); 
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_ISH_HEAP_BUFFER                                   ,  1,     0,      0,      0    , 0		,  0       ,  1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_TAG_MEMORY_BUFFER                                 ,  1,     0,      0,      0    , 0		,  0       ,  1,    NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_OCL_TEXTURE_BUFFER                                    ,  1,     0,      0,      0    , 0		,  0       ,  1,    NoP);
@@ -242,7 +249,7 @@ DEFINE_CACHE_ELEMENT( GMM_RESOURCE_USAGE_BLT_DESTINATION                        
 //                   USAGE TYPE                                                         L3_CC,   L3_CLOS,L1CC,   L2CC,   L4CC,     Coherency,	IgPAT )
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_MEDIA_BATCH_BUFFERS                             ,  0,     0,      0,      0,		0,         0 ,        1,	  NoP	 );
 // DECODE
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DECODE_INPUT_BITSTREAM                          ,  1,     0,     0,      0,  L4_IgPAT,         0  , L4_IgPAT,    NoP    );
+DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DECODE_INPUT_BITSTREAM                          ,  1,     0,     0,      0,			0,         0  ,        0,    NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DECODE_INPUT_REFERENCE                          ,  1,     0,     0,      1,			1,         0  ,        1,    NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DECODE_INTERNAL_READ                            ,  1,     0,     0,      0,			1,         0  ,        1,    NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DECODE_INTERNAL_WRITE                           ,  0,     0,     0,      0,			0,         0  ,        1,    NoP    );
@@ -252,7 +259,7 @@ DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DECODE_OUTPUT_PICTURE                   
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DECODE_OUTPUT_STATISTICS_WRITE                  ,  0,     0,     0,      0,			0,         1  ,        1,    NoP    );  
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DECODE_OUTPUT_STATISTICS_READ_WRITE             ,  1,     0,     0,      0,			1,         0  ,        1,    NoP	 );
 // ENCODE
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_INPUT_RAW                                ,  1,     0,     0,      0,  L4_IgPAT,         0  , L4_IgPAT,    NoP    );
+DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_INPUT_RAW                                ,  1,     0,     0,      0,			0,         0  ,        0,    NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_INPUT_RECON                              ,  1,     0,     0,      1,			1,         0  ,        1,    NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_INTERNAL_READ                            ,  1,     0,     0,      0,			1,         0  ,        1,    NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_INTERNAL_WRITE                           ,  0,     0,     0,      0,			0,         0  ,        1,    NoP    );
@@ -260,7 +267,7 @@ DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_INTERNAL_READ_WRITE_CACHE        
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_INTERNAL_READ_WRITE_NOCACHE              ,  0,     0,     0,      0,			0,         0  ,        1,    NoP    );  
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_EXTERNAL_READ                            ,  0,     0,     0,      0,			0,         0  ,        1,    NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_OUTPUT_PICTURE                           ,  1,     0,     0,      0,			1,         0  ,        1,    NoP    );
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_OUTPUT_BITSTREAM                         ,  0,     0,     0,      0,			0,         1  ,        1,	  NoP    ); 
+DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_OUTPUT_BITSTREAM                         ,  0,     0,     0,      0,			0,         1  ,        1,	  NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_OUTPUT_STATISTICS_WRITE                  ,  0,     0,     0,      0,			0,         1  ,        1,	  NoP    ); 
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_ENCODE_OUTPUT_STATISTICS_READ_WRITE             ,  1,     0,     0,      0,			1,         0  ,        1,	  NoP    );
 // VP
@@ -275,7 +282,7 @@ DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_VP_INPUT_REFERENCE_RENDER               
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_VP_INTERNAL_READ_RENDER                         ,  0,     0,     0,      0,			0,         0  ,        1,	  NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_VP_INTERNAL_WRITE_RENDER                        ,  0,     0,     0,      0,			0,         0  ,        1,	  NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_VP_INTERNAL_READ_WRITE_RENDER                   ,  1,     0,     0,      0,			0,         0  ,        1,	  NoP    );
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_VP_OUTPUT_PICTURE_RENDER                        ,  3,     0,     0,      0,			0,         0  ,        0,	  NoP    ); 
+DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_VP_OUTPUT_PICTURE_RENDER                        ,  3,     0,     0,      0,			0,         0  ,        0,	  NoP    );
 // CP
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_CP_EXTERNAL_READ                                ,  0,     0,     0,      0,			0,         0  ,        1,	  NoP    );
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_CP_INTERNAL_WRITE                               ,  0,     0,     0,      0,			0,         0  ,        1,	  NoP    );
@@ -290,17 +297,7 @@ DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_COMMAND_STREAMER                        
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_COPY_SOURCE                                     , 0,         0,     0 ,      0,	     0,       0,        1,	  NoP);
 DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_COPY_DEST                                       , 0,         0,     0 ,      0,      0,       0,        1,	  NoP);
 
-//Usages for command streamer instructions
-//                   USAGE TYPE                                                        , L3_CC,   L3_CLOS, L1CC,   L2CC,   L4CC,   Coherency, IgPAT)
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_DEFAULT                                         , 1,         0,     0 ,      0,      0,       0,        1,    NoP);
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_COARSE_GRAINED_COHERENT                         , 1,         0,     0 ,      0,      0,       1,        1,    NoP);
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_FINE_GRAINED_COHERENT                           , 1,         0,     0 ,      0,      0,       2,        1,    NoP);
-DEFINE_CACHE_ELEMENT(GMM_RESOURCE_USAGE_FINE_GRAINED_COHERENT_MULTI_WRITE               , 1,         0,     0 ,      0,      0,       2,        1,    NoP);
-
 // clang-format on
 
 #undef _WT
-#undef iGPU
-#undef L4_IgPAT
 #include "GmmCachePolicyUndefineConditionals.h"
-
